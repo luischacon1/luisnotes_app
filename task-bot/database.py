@@ -91,6 +91,14 @@ def update_fecha_recordatorio(task_id: int, nueva_fecha: str):
         conn.commit()
 
 
+def find_tasks_by_description(query: str):
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM tasks WHERE completada = 0 AND descripcion LIKE ? ORDER BY fecha_creacion DESC",
+            (f"%{query}%",),
+        ).fetchall()
+
+
 def get_due_reminders():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     with get_connection() as conn:
