@@ -1,6 +1,9 @@
 import sqlite3
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+MADRID_TZ = ZoneInfo("Europe/Madrid")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.db")
 
@@ -71,7 +74,7 @@ def mark_completed(task_id: int):
     with get_connection() as conn:
         conn.execute(
             "UPDATE tasks SET completada = 1, fecha_completada = ? WHERE id = ?",
-            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), task_id),
+            (datetime.now(MADRID_TZ).strftime("%Y-%m-%d %H:%M:%S"), task_id),
         )
         conn.commit()
 

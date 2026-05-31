@@ -1,11 +1,13 @@
 import json
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import openai
 
 client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+MADRID_TZ = ZoneInfo("Europe/Madrid")
 INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.md")
 
 _BASE_SYSTEM = """Eres el asistente personal de Luis. Gestionas su lista de tareas pero también \
@@ -14,7 +16,8 @@ puedes responder preguntas, dar consejos y mantener conversación natural.
 Cuando el usuario te pida cambiar tu comportamiento o diga "de ahora en adelante X", \
 usa save_instructions para actualizar tus propias reglas escribiendo el contenido COMPLETO actualizado.
 
-Fecha y hora actual: {now}
+Fecha y hora actual (Madrid): {now}
+Zona horaria: Europe/Madrid. Todas las fechas y horas que interpretes o generes deben ser en hora de Madrid.
 
 ## Instrucciones personalizadas:
 {instructions}"""
@@ -160,7 +163,7 @@ async def chat_with_assistant(user_message: str, history: list) -> tuple[str, li
     import database
 
     system = _BASE_SYSTEM.format(
-        now=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        now=datetime.now(MADRID_TZ).strftime("%Y-%m-%d %H:%M (%A)"),
         instructions=load_instructions(),
     )
     messages: list = [{"role": "system", "content": system}] + history + [
