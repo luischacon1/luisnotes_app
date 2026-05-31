@@ -127,11 +127,14 @@ async def _assistant_reply(update: Update, msg, user_text: str) -> None:
     user_id = update.effective_user.id
     history = _chat_histories.get(user_id, [])
 
-    response_text, new_history, meta = await ai.chat_with_assistant(user_text, history)
-    _chat_histories[user_id] = new_history
-
-    keyboard = _task_keyboard(meta["created_task_id"]) if meta.get("created_task_id") else None
-    await msg.edit_text(response_text or "...", reply_markup=keyboard)
+    try:
+        response_text, new_history, meta = await ai.chat_with_assistant(user_text, history)
+        _chat_histories[user_id] = new_history
+        keyboard = _task_keyboard(meta["created_task_id"]) if meta.get("created_task_id") else None
+        await msg.edit_text(response_text or "...", reply_markup=keyboard)
+    except Exception as exc:
+        logger.exception("Error en _assistant_reply: %s", exc)
+        await msg.edit_text(f"❌ Error: {exc}")
 
 
 # ── Inline button callbacks ───────────────────────────────────────────────────
