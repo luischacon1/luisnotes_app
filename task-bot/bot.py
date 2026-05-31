@@ -14,15 +14,13 @@ from telegram.ext import (
 )
 
 import ai
-import database
+import database  # noqa: E402  (used for history, settings, tasks)
 
 logger = logging.getLogger(__name__)
 
 MY_TELEGRAM_ID = int(os.getenv("MY_TELEGRAM_ID", "0"))
 PRIORITY_EMOJI = {"alta": "🔴", "media": "🟡", "baja": "🟢"}
 
-# Conversation history per user (in-memory, resets on bot restart)
-_chat_histories: dict[int, list] = {}
 
 
 def _task_keyboard(task_id: int) -> InlineKeyboardMarkup:
@@ -44,13 +42,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "👋 Hola Luis, soy tu asistente personal.\n\n"
-        "Puedes hablarme con voz o texto — crear tareas, preguntarme cosas, "
-        "o decirme cómo quieres que me comporte.\n\n"
-        "Comandos:\n"
+        "Puedes hablarme con voz o texto — cuéntame lo que necesitas.\n\n"
         "/tareas — ver pendientes\n"
         "/completadas — ver completadas hoy\n"
-        "/instrucciones — ver mis reglas actuales\n"
-        "/reset — reiniciar conversación"
+        "/memoria — ver lo que sé de ti\n"
+        "/instrucciones — ver mis reglas\n"
+        "/reset — borrar historial de conversación"
     )
 
 
@@ -83,15 +80,22 @@ async def list_completed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def show_instructions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _is_authorized(update):
         return
-    content = ai.load_instructions()
+    content = database.get_instructions()
     await update.message.reply_text(f"📋 *Instrucciones actuales:*\n\n{content}", parse_mode="Markdown")
+
+
+async def show_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _is_authorized(update):
+        return
+    content = database.get_memory()
+    await update.message.reply_text(f"🧠 *Lo que sé de ti:*\n\n{content}", parse_mode="Markdown")
 
 
 async def reset_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _is_authorized(update):
         return
-    _chat_histories.pop(update.effective_user.id, None)
-    await update.message.reply_text("🔄 Conversación reiniciada.")
+    database.clear_conversation()
+    await update.message.reply_text("🔄 Conversación reiniciada. La memoria de largo plazo se conserva.")
 
 
 # ── Message handlers ──────────────────────────────────────────────────────────
@@ -124,12 +128,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def _assistant_reply(update: Update, msg, user_text: str) -> None:
-    user_id = update.effective_user.id
-    history = _chat_histories.get(user_id, [])
-
     try:
-        response_text, new_history, meta = await ai.chat_with_assistant(user_text, history)
-        _chat_histories[user_id] = new_history
+        response_text, meta = await ai.chat_with_assistant(user_text)
         keyboard = _task_keyboard(meta["created_task_id"]) if meta.get("created_task_id") else None
         await msg.edit_text(response_text or "...", reply_markup=keyboard)
     except Exception as exc:
@@ -184,6 +184,7 @@ def setup_bot(token: str) -> Application:
     app.add_handler(CommandHandler("tareas", list_tasks))
     app.add_handler(CommandHandler("completadas", list_completed))
     app.add_handler(CommandHandler("instrucciones", show_instructions))
+    app.add_handler(CommandHandler("memoria", show_memory))
     app.add_handler(CommandHandler("reset", reset_history))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

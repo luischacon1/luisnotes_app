@@ -1,11 +1,14 @@
-import sqlite3
+import json
 import os
+import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 MADRID_TZ = ZoneInfo("Europe/Madrid")
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.db")
+# Si Railway tiene un volumen montado, usarlo para persistencia real
+_volume = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "")
+DB_PATH = os.path.join(_volume if _volume else os.path.dirname(os.path.abspath(__file__)), "tasks.db")
 
 
 def get_connection():
@@ -27,8 +30,121 @@ def init_db():
                 fecha_completada TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_calls TEXT,
+                tool_call_id TEXT,
+                timestamp TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         conn.commit()
 
+
+# ── Settings (instructions + memory) ─────────────────────────────────────────
+
+DEFAULT_INSTRUCTIONS = """# Instrucciones personalizadas de Luis
+
+## Comportamiento general
+- Responde siempre en español
+- Sé conciso, directo y amigable
+- Si no estás seguro de algo, pregunta antes de actuar
+
+## Reglas de tareas
+- Si no se especifica prioridad, usa "media" por defecto
+- Si no hay fecha explícita, fecha_recordatorio es null
+- Cuando crees una tarea, confirma brevemente qué has guardado
+"""
+
+DEFAULT_MEMORY = """# Lo que sé de Luis
+
+## Datos básicos
+- Ubicación: Madrid, España
+- Zona horaria: Europe/Madrid
+
+## Preferencias y rutinas
+(Iré aprendiendo a medida que conversamos)
+
+## Compromisos recurrentes
+(Iré aprendiendo a medida que conversamos)
+"""
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_connection() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+
+def get_instructions() -> str:
+    return get_setting("instructions", DEFAULT_INSTRUCTIONS)
+
+
+def save_instructions(content: str) -> None:
+    set_setting("instructions", content)
+
+
+def get_memory() -> str:
+    return get_setting("memory", DEFAULT_MEMORY)
+
+
+def save_memory(content: str) -> None:
+    set_setting("memory", content)
+
+
+# ── Conversation history ──────────────────────────────────────────────────────
+
+def append_message(role: str, content=None, tool_calls=None, tool_call_id=None) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO conversation (role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?)",
+            (role, content, json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None, tool_call_id),
+        )
+        conn.commit()
+
+
+def get_conversation_history(limit: int = 60) -> list:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT role, content, tool_calls, tool_call_id FROM conversation ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return list(reversed(rows))
+
+
+def clear_conversation() -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM conversation")
+        conn.commit()
+
+
+def row_to_message(row) -> dict:
+    msg: dict = {"role": row["role"], "content": row["content"]}
+    if row["tool_calls"]:
+        msg["tool_calls"] = json.loads(row["tool_calls"])
+    if row["tool_call_id"]:
+        msg["tool_call_id"] = row["tool_call_id"]
+    return msg
+
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
 
 def add_task(descripcion: str, fecha_recordatorio: str = None, prioridad: str = "media") -> int:
     with get_connection() as conn:
@@ -52,12 +168,7 @@ def get_pending_tasks():
             SELECT * FROM tasks
             WHERE completada = 0
             ORDER BY
-                CASE prioridad
-                    WHEN 'alta'  THEN 1
-                    WHEN 'media' THEN 2
-                    WHEN 'baja'  THEN 3
-                    ELSE 4
-                END,
+                CASE prioridad WHEN 'alta' THEN 1 WHEN 'media' THEN 2 WHEN 'baja' THEN 3 ELSE 4 END,
                 fecha_creacion
             """
         ).fetchall()
@@ -103,7 +214,7 @@ def find_tasks_by_description(query: str):
 
 
 def get_due_reminders():
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(MADRID_TZ).strftime("%Y-%m-%d %H:%M")
     with get_connection() as conn:
         return conn.execute(
             """
